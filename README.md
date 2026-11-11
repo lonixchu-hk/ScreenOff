@@ -18,7 +18,7 @@ ScreenOff is a small, portable Windows app for when you want a dark screen witho
 
 ## Use ScreenOff
 
-Run [ScreenOff.exe](ScreenOff.exe) on Windows 11 x64 to start the blackout immediately. To return to your desktop, **double-click the left mouse button** or **tap Space twice quickly**.
+Download [ScreenOff for Windows 11 x64](https://github.com/lonixchu-hk/ScreenOff/releases/latest/download/ScreenOff-windows-x64.zip), extract the ZIP, and open `ScreenOff.exe` to start the blackout. To return to your desktop, **double-click the left mouse button** or **tap Space twice quickly**.
 
 Both gestures use the Windows double-click timing. The desktop returns after the second release, and ScreenOff consumes the clicks or key presses so they stay out of the app underneath. A single click, mouse movement, or holding Space keeps the blackout active.
 
