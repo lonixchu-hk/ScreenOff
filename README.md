@@ -1,6 +1,20 @@
-# ScreenOff
+<p align="center">
+  <img src="assets/screenoff.png" width="112" height="112" alt="ScreenOff Veil logo">
+</p>
 
-ScreenOff is a small Windows utility that blacks out every active monitor while your apps keep running. It draws pure black (`#000000`), hides the pointer, and asks Windows to keep the displays awake during the blackout.
+<h1 align="center">ScreenOff</h1>
+
+<p align="center">Black out every monitor while your apps keep running.</p>
+
+<p align="center">
+  <a href="#use-screenoff"><img src="https://img.shields.io/badge/Windows-11%20x64-0078D4" alt="Windows 11 x64"></a>
+  <a href="#build-from-source"><img src="https://img.shields.io/badge/Win32-C%2B%2B17-5B21B6" alt="Win32 and C++17"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-15803D" alt="MIT license"></a>
+</p>
+
+## About ScreenOff
+
+ScreenOff is a small, portable Windows app for when you want a dark screen without interrupting work in the background. It fills every active display with pure black (`#000000`), hides the pointer, and asks Windows to keep the displays awake during the blackout.
 
 ## Use ScreenOff
 
@@ -16,14 +30,18 @@ The display signal stays active during normal operation. An LCD may still emit s
 
 ## Build from source
 
-Install the MSVC x64 C++ build tools and a Windows SDK through Visual Studio Build Tools. Then run from the project folder in PowerShell:
+Install the MSVC x64 C++ build tools and a Windows SDK through Visual Studio Build Tools. Run `build.cmd` from the project folder in PowerShell.
 
 ```powershell
 .\build.cmd
 ```
 
-The build produces `ScreenOff.exe` with the embedded Veil application icon. To run the dismissal gesture tests:
+The build produces `ScreenOff.exe` with the embedded Veil application icon. Run the gesture tests with `build.cmd test`.
 
 ```powershell
 .\build.cmd test
 ```
+
+## License
+
+ScreenOff is available under the [MIT License](LICENSE).
