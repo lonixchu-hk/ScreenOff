@@ -610,7 +610,7 @@ INT_PTR CALLBACK SettingsProc(HWND dialog, UINT message, WPARAM wparam, LPARAM l
         captureState = &state;
         if (!state.recorder) state.recorder.reset(SetWindowsHookExW(WH_KEYBOARD_LL, CaptureShortcut, state.instance, 0));
         if (!state.recorder) {
-            MessageBoxW(dialog, L"ScreenOff could not start shortcut recording.", L"ScreenOff Settings", MB_OK | MB_ICONWARNING);
+            MessageBoxW(dialog, L"ScreenOff could not start shortcut recording.", L"Setting", MB_OK | MB_ICONWARNING);
             return TRUE;
         }
         SetDlgItemTextW(dialog, ShortcutText, L"Press a shortcut, or Esc to cancel");
@@ -628,13 +628,13 @@ INT_PTR CALLBACK SettingsProc(HWND dialog, UINT message, WPARAM wparam, LPARAM l
         const auto key = SendDlgItemMessageW(dialog, KeyChoice, CB_GETITEMDATA, index, 0);
         const Settings next{static_cast<DWORD>(mouse), static_cast<DWORD>(key), state.draftShortcut};
         if (const auto* error = SaveSettings(state, next)) {
-            MessageBoxW(dialog, error, L"ScreenOff Settings", MB_OK | MB_ICONWARNING);
+            MessageBoxW(dialog, error, L"Setting", MB_OK | MB_ICONWARNING);
             return TRUE;
         }
         const bool signIn = next.shortcut && IsDlgButtonChecked(dialog, StartAtSignIn) == BST_CHECKED;
         if (signIn != SignInEnabled() && !SetSignIn(signIn)) {
             MessageBoxW(dialog, L"Settings were saved, but Windows could not update Start at sign-in.",
-                        L"ScreenOff Settings", MB_OK | MB_ICONWARNING);
+                        L"Setting", MB_OK | MB_ICONWARNING);
             CheckDlgButton(dialog, StartAtSignIn, SignInEnabled() ? BST_CHECKED : BST_UNCHECKED);
             return TRUE;
         }
@@ -723,7 +723,7 @@ LRESULT CALLBACK TrayProc(HWND window, UINT message, WPARAM wparam, LPARAM lpara
         if (lparam == WM_RBUTTONUP && !state->dialog) {
             const HMENU menu = CreatePopupMenu();
             if (!menu) return 0;
-            AppendMenuW(menu, MF_STRING, 1, L"Settings");
+            AppendMenuW(menu, MF_STRING, 1, L"Setting");
             AppendMenuW(menu, MF_STRING, 2, L"Exit shortcut listener");
             POINT cursor{};
             GetCursorPos(&cursor);
@@ -777,7 +777,7 @@ int RunListener(HINSTANCE instance, bool configure) {
         state.registered = state.settings.shortcut;
         TrayIcon(state, NIM_ADD);
     } else if (!configure) {
-        MessageBoxW(nullptr, L"Windows could not register the saved shortcut. Open ScreenOff Settings to change it.",
+        MessageBoxW(nullptr, L"Windows could not register the saved shortcut. Open Setting to change it.",
                     L"ScreenOff", MB_OK | MB_ICONWARNING);
         DestroyWindow(state.window);
         return Success;

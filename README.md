@@ -29,7 +29,7 @@ Both default gestures use the Windows double-click timing. The desktop returns a
 
 ## Configure ScreenOff
 
-Opening `ScreenOff.exe` starts blackout immediately without opening Settings. To configure ScreenOff, keep `ScreenOff Settings.cmd` beside the executable and open it separately. You can also run `ScreenOff.exe --settings` or open Settings from the tray icon while the shortcut listener is running. Settings are saved for your Windows account.
+Opening `ScreenOff.exe` starts blackout immediately. To configure ScreenOff, open `Setting.cmd` (named `ScreenOff Settings.cmd` in older releases) beside the executable. You can also run `ScreenOff.exe --settings` or choose **Setting** from the tray icon while the shortcut listener is running. Settings are saved for your Windows account.
 
 - **Exit blackout** lets you choose a single or double click with the left or right mouse button and a key to tap twice. You can turn either method off and must keep at least one enabled.
 - **Start blackout shortcut** lets you select **Record**, press a shortcut such as `Ctrl+Alt+B`, and select **Save**. Press the shortcut from another app to start blackout. The notification area icon stays available between blackouts. Double-click the icon to reopen Settings or right-click to quit the listener.

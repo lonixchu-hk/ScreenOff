@@ -1,10 +1,10 @@
 #include <windows.h>
 
-101 ICON "ScreenOff.ico"
+101 ICON "assets\\ScreenOff.ico"
 
 200 DIALOGEX 0, 0, 288, 154
 STYLE DS_SETFONT | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU
-CAPTION "ScreenOff Settings"
+CAPTION "Setting"
 FONT 9, "Segoe UI"
 BEGIN
     GROUPBOX "Exit blackout", -1, 8, 6, 272, 53
