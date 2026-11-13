@@ -46,7 +46,7 @@ var
 
 function GetWindowThreadProcessId(Wnd: HWND; var ProcessId: Cardinal): Cardinal;
   external 'GetWindowThreadProcessId@user32.dll stdcall';
-function FindWindowEx(Parent, After: HWND; ClassName, Caption: String): HWND;
+function FindWindowEx(Parent, After: HWND; ClassName: String; Caption: Cardinal): HWND;
   external 'FindWindowExW@user32.dll stdcall';
 function OpenProcess(Access: Cardinal; Inherit: Boolean; ProcessId: Cardinal): THandle;
   external 'OpenProcess@kernel32.dll stdcall';
@@ -83,17 +83,14 @@ begin
     SetLength(Path, PathLength);
     if CompareText(ExtractFileName(Path), 'ScreenOff.exe') <> 0 then Exit;
 
-    { Older versions open an unowned Settings dialog. Close it before the listener. }
-    Dialog := FindWindowEx(0, 0, '#32770', 'Setting');
+    { Close Settings and any modal warning belonging to the listener. }
+    Dialog := FindWindowEx(0, 0, '#32770', 0);
     while Dialog <> 0 do
     begin
       GetWindowThreadProcessId(Dialog, DialogProcessId);
       if DialogProcessId = ProcessId then
-      begin
         PostMessage(Dialog, CloseMessage, 0, 0);
-        Break;
-      end;
-      Dialog := FindWindowEx(0, Dialog, '#32770', 'Setting');
+      Dialog := FindWindowEx(0, Dialog, '#32770', 0);
     end;
     PostMessage(Listener, CloseMessage, 0, 0);
     Executable := Path;
@@ -158,18 +155,13 @@ begin
     StartListener(PreviousListener);
 end;
 
-function InitializeUninstall: Boolean;
-begin
-  Result := not CheckForMutexes(BlackoutMutex);
-  if Result then
-    Result := StopListener(PreviousListener);
-  if not Result then
-    SuppressibleMsgBox('Resume the desktop or close ScreenOff before uninstalling.',
-                       mbError, MB_OK, IDOK);
-end;
-
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 begin
+  if CurUninstallStep = usAppMutexCheck then
+  begin
+    if CheckForMutexes(BlackoutMutex) or not StopListener(PreviousListener) then
+      RaiseException('Resume the desktop or close ScreenOff before uninstalling.');
+  end;
   if CurUninstallStep <> usPostUninstall then Exit;
   if RegValueExists(HKCU, ProfileKey, 'Settings') and
      not RegDeleteValue(HKCU, ProfileKey, 'Settings') then
