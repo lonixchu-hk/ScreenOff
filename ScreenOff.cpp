@@ -2,6 +2,7 @@
 #define NOMINMAX
 #include <windows.h>
 #include <imm.h>
+#include <string>
 
 constexpr UINT ShortcutModifiers = MOD_CONTROL | MOD_ALT | MOD_SHIFT;
 
@@ -25,6 +26,39 @@ struct Settings {
                (!shortcut || (modifiers && !(modifiers & ~ShortcutModifiers) && ShortcutKey(LOWORD(shortcut))));
     }
 };
+
+std::wstring KeyName(UINT key) {
+    switch (key) {
+    case 0: return L"Off";
+    case VK_SPACE: return L"Space";
+    case VK_ESCAPE: return L"Esc";
+    case VK_LCONTROL: return L"Left Ctrl";
+    case VK_RETURN: return L"Enter";
+    default:
+        if (key >= VK_F1 && key <= VK_F11) return L"F" + std::to_wstring(key - VK_F1 + 1);
+        return std::wstring(1, static_cast<wchar_t>(key));
+    }
+}
+
+std::wstring ResumeHint(const Settings& settings) {
+    constexpr const wchar_t* mouseHints[]{L"", L"double-click the left mouse button",
+        L"double-click the right mouse button", L"click the left mouse button", L"click the right mouse button"};
+    std::wstring hint = L"To resume, ";
+    hint += mouseHints[settings.mouse];
+    if (settings.mouse && settings.key) hint += L" or ";
+    if (settings.key) hint += L"tap " + KeyName(settings.key) + L" twice";
+    return hint + L".";
+}
+
+constexpr DWORD ReminderDuration = 5000;
+constexpr DWORD ReminderFade = 250;
+
+int ReminderGray(DWORD elapsed) {
+    if (elapsed >= ReminderDuration) return 0;
+    if (elapsed < ReminderFade) return 192 * elapsed / ReminderFade;
+    if (elapsed > ReminderDuration - ReminderFade) return 192 * (ReminderDuration - elapsed) / ReminderFade;
+    return 192;
+}
 
 class ExitGesture {
 public:
@@ -73,6 +107,18 @@ private:
 #include <cstdio>
 
 int main() {
+    if (ReminderGray(0) != 0 || ReminderGray(125) != 96 ||
+        ReminderGray(250) != 192 || ReminderGray(4750) != 192 ||
+        ReminderGray(4875) != 96 || ReminderGray(5000) != 0) {
+        std::fputs("The reminder must fade in and out within five seconds.\n", stderr);
+        return 1;
+    }
+    if (ResumeHint(Settings{}) != L"To resume, double-click the left mouse button or tap Space twice." ||
+        ResumeHint(Settings{4, 0, 0}) != L"To resume, click the right mouse button." ||
+        ResumeHint(Settings{0, VK_LCONTROL, 0}) != L"To resume, tap Left Ctrl twice.") {
+        std::fputs("The reminder must show only the configured resume gestures.\n", stderr);
+        return 1;
+    }
     ExitGesture click;
     if (click.Handle(WM_LBUTTONDOWN) || click.Handle(WM_LBUTTONUP)) {
         std::fputs("A single click must not dismiss the blackout.\n", stderr);
@@ -136,7 +182,6 @@ int main() {
 #include <cwchar>
 #include <memory>
 #include <shellapi.h>
-#include <string>
 #include <type_traits>
 #include <vector>
 
@@ -153,6 +198,7 @@ constexpr wchar_t DesktopPrefix[] = L"ScreenOff-";
 constexpr wchar_t RestoreArgument[] = L" --restore ";
 constexpr DWORD StartupTimeoutMs = 5000;
 constexpr UINT DismissAfterKey = WM_APP + 1;
+constexpr UINT ShowResumeHint = WM_APP + 5;
 constexpr ACCESS_MASK InputDesktopAccess = DESKTOP_READOBJECTS | DESKTOP_SWITCHDESKTOP;
 constexpr wchar_t SettingsKey[] = L"Software\\ScreenOff";
 
@@ -191,6 +237,9 @@ struct WorkerState {
     DWORD mouse;
     DWORD key;
     DWORD interval;
+    std::wstring hint;
+    bool reminderRequested = false;
+    int reminderGray = 0;
     bool displayChanged = false;
     ExitGesture mouseGesture;
     KeyGesture keyGesture;
@@ -209,6 +258,29 @@ LRESULT CALLBACK BlackoutWindow(HWND window, UINT message, WPARAM wparam, LPARAM
         PAINTSTRUCT paint{};
         HDC dc = BeginPaint(window, &paint);
         FillRect(dc, &paint.rcPaint, static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
+        if (state->reminderGray) {
+            RECT bounds{};
+            GetClientRect(window, &bounds);
+            const UINT dpi = GetDpiForWindow(window);
+            const int margin = MulDiv(24, dpi, 96);
+            HFONT font = CreateFontW(-MulDiv(14, dpi, 72), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                                     DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                                     ANTIALIASED_QUALITY, DEFAULT_PITCH, L"Segoe UI");
+            const HGDIOBJ previous = font ? SelectObject(dc, font) : nullptr;
+            RECT text{margin, 0, bounds.right - margin, 0};
+            constexpr UINT format = DT_CENTER | DT_WORDBREAK | DT_NOPREFIX;
+            DrawTextW(dc, state->hint.c_str(), -1, &text, format | DT_CALCRECT);
+            const int gray = state->reminderGray;
+            SetTextColor(dc, RGB(gray, gray, gray));
+            SetBkMode(dc, TRANSPARENT);
+            text.right = bounds.right - margin;
+            OffsetRect(&text, 0, bounds.bottom * 58 / 100 - text.bottom / 2);
+            DrawTextW(dc, state->hint.c_str(), -1, &text, format);
+            if (font) {
+                SelectObject(dc, previous);
+                DeleteObject(font);
+            }
+        }
         EndPaint(window, &paint);
         return 0;
     }
@@ -227,13 +299,19 @@ LRESULT CALLBACK BlackoutWindow(HWND window, UINT message, WPARAM wparam, LPARAM
     case WM_RBUTTONDBLCLK:
     case WM_RBUTTONUP: {
         const bool right = message >= WM_RBUTTONDOWN;
-        if (!state->mouse || right != (state->mouse % 2 == 0)) return 0;
+        if (!state->mouse || right != (state->mouse % 2 == 0)) {
+            if (message == WM_LBUTTONUP || message == WM_RBUTTONUP) state->reminderRequested = true;
+            return 0;
+        }
         const UINT click = right ? message - (WM_RBUTTONDOWN - WM_LBUTTONDOWN) : message;
         // Windows marks mouse compatibility messages generated by a pen or touch screen.
         if ((GetMessageExtraInfo() & 0xFFFFFF00) == 0xFF515700) {
             state->mouseGesture.Handle(WM_CANCELMODE);
+            if (click == WM_LBUTTONUP) state->reminderRequested = true;
         } else if (state->mouseGesture.Handle(click, state->mouse >= 3)) {
             SetEvent(state->dismiss);
+        } else if (click == WM_LBUTTONUP) {
+            state->reminderRequested = true;
         }
         return 0;
     }
@@ -242,8 +320,11 @@ LRESULT CALLBACK BlackoutWindow(HWND window, UINT message, WPARAM wparam, LPARAM
         return 0;
     case WM_APPCOMMAND:
     case WM_XBUTTONDOWN:
-    case WM_XBUTTONUP:
     case WM_XBUTTONDBLCLK:
+        return TRUE;
+    case WM_XBUTTONUP:
+    case WM_MBUTTONUP:
+        state->reminderRequested = true;
         return TRUE;
     case WM_CLOSE:
     case WM_SYSCOMMAND:
@@ -262,10 +343,13 @@ LRESULT CALLBACK ConsumeKeyboard(int code, WPARAM wparam, LPARAM lparam) {
     if (code != HC_ACTION) return CallNextHookEx(nullptr, code, wparam, lparam);
 
     const auto* key = reinterpret_cast<const KBDLLHOOKSTRUCT*>(lparam);
+    const bool released = (key->flags & LLKHF_UP) != 0;
     if (keyboardState->key && key->vkCode == keyboardState->key && keyboardState->keyGesture.Handle(
-            (key->flags & LLKHF_UP) != 0, key->time, keyboardState->interval)) {
+            released, key->time, keyboardState->interval)) {
         // Let the hook consume the release before the worker signals the desktop switch.
         PostThreadMessageW(GetCurrentThreadId(), DismissAfterKey, 0, 0);
+    } else if (released) {
+        PostThreadMessageW(GetCurrentThreadId(), ShowResumeHint, 0, 0);
     }
     return 1;
 }
@@ -324,7 +408,7 @@ int RunWorker(HINSTANCE instance, HANDLE ready, HANDLE dismiss, HANDLE stop, HAN
     windowClass.lpszClassName = WindowClass;
     if (!RegisterClassW(&windowClass)) return WorkerStartupFailed;
 
-    WorkerState state{dismiss, settings.mouse, settings.key, GetDoubleClickTime()};
+    WorkerState state{dismiss, settings.mouse, settings.key, GetDoubleClickTime(), ResumeHint(settings)};
     std::vector<HWND> windows;
     if (!UpdateWindows(instance, state, windows)) return WorkerStartupFailed;
     SetCursor(nullptr);
@@ -337,6 +421,8 @@ int RunWorker(HINSTANCE instance, HANDLE ready, HANDLE dismiss, HANDLE stop, HAN
     }
 
     int result = WorkerStartupFailed;
+    UINT_PTR reminderTimer = 0;
+    DWORD reminderStart = 0;
     if (SetEvent(ready)) {
         result = Success;
         const HANDLE exitEvents[]{stop, supervisor};
@@ -356,10 +442,29 @@ int RunWorker(HINSTANCE instance, HANDLE ready, HANDLE dismiss, HANDLE stop, HAN
             while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) {
                 if (message.message == DismissAfterKey && !message.hwnd) {
                     SetEvent(dismiss);
+                } else if (message.message == ShowResumeHint && !message.hwnd) {
+                    state.reminderRequested = true;
                 } else {
                     DispatchMessageW(&message);
                 }
                 if (WaitForMultipleObjects(2, exitEvents, FALSE, 0) != WAIT_TIMEOUT) break;
+            }
+            if (state.reminderRequested && !reminderTimer) {
+                reminderStart = GetTickCount();
+                reminderTimer = SetTimer(nullptr, 0, 16, nullptr);
+            }
+            state.reminderRequested = false;
+            if (reminderTimer) {
+                const DWORD elapsed = GetTickCount() - reminderStart;
+                const int gray = ReminderGray(elapsed);
+                if (gray != state.reminderGray) {
+                    state.reminderGray = gray;
+                    for (HWND window : windows) InvalidateRect(window, nullptr, FALSE);
+                }
+                if (elapsed >= ReminderDuration) {
+                    KillTimer(nullptr, reminderTimer);
+                    reminderTimer = 0;
+                }
             }
             if (state.displayChanged) {
                 state.displayChanged = false;
@@ -371,6 +476,7 @@ int RunWorker(HINSTANCE instance, HANDLE ready, HANDLE dismiss, HANDLE stop, HAN
         }
     }
 
+    if (reminderTimer) KillTimer(nullptr, reminderTimer);
     SetThreadExecutionState(ES_CONTINUOUS);
     for (HWND window : windows) DestroyWindow(window);
     return result;
@@ -482,19 +588,6 @@ struct Listener {
 };
 
 thread_local Listener* captureState = nullptr;
-
-std::wstring KeyName(UINT key) {
-    switch (key) {
-    case 0: return L"Off";
-    case VK_SPACE: return L"Space";
-    case VK_ESCAPE: return L"Esc";
-    case VK_LCONTROL: return L"Left Ctrl";
-    case VK_RETURN: return L"Enter";
-    default:
-        if (key >= VK_F1 && key <= VK_F11) return L"F" + std::to_wstring(key - VK_F1 + 1);
-        return std::wstring(1, static_cast<wchar_t>(key));
-    }
-}
 
 void ShowShortcut(Listener& state) {
     std::wstring label;
