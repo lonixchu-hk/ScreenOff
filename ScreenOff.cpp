@@ -50,14 +50,15 @@ std::wstring ResumeHint(const Settings& settings) {
     return hint + L".";
 }
 
-constexpr DWORD ReminderDuration = 5000;
+constexpr DWORD ReminderDuration = 4000;
 constexpr DWORD ReminderFade = 250;
+constexpr int ReminderTextGray = 208;
 
 int ReminderGray(DWORD elapsed) {
     if (elapsed >= ReminderDuration) return 0;
-    if (elapsed < ReminderFade) return 192 * elapsed / ReminderFade;
-    if (elapsed > ReminderDuration - ReminderFade) return 192 * (ReminderDuration - elapsed) / ReminderFade;
-    return 192;
+    if (elapsed < ReminderFade) return ReminderTextGray * elapsed / ReminderFade;
+    if (elapsed > ReminderDuration - ReminderFade) return ReminderTextGray * (ReminderDuration - elapsed) / ReminderFade;
+    return ReminderTextGray;
 }
 
 class ExitGesture {
@@ -107,10 +108,10 @@ private:
 #include <cstdio>
 
 int main() {
-    if (ReminderGray(0) != 0 || ReminderGray(125) != 96 ||
-        ReminderGray(250) != 192 || ReminderGray(4750) != 192 ||
-        ReminderGray(4875) != 96 || ReminderGray(5000) != 0) {
-        std::fputs("The reminder must fade in and out within five seconds.\n", stderr);
+    if (ReminderGray(0) != 0 || ReminderGray(125) != 104 ||
+        ReminderGray(250) != 208 || ReminderGray(3750) != 208 ||
+        ReminderGray(3875) != 104 || ReminderGray(4000) != 0) {
+        std::fputs("The reminder must fade in and out within four seconds.\n", stderr);
         return 1;
     }
     if (ResumeHint(Settings{}) != L"To resume, double-click the left mouse button or tap Space twice." ||
@@ -200,7 +201,19 @@ constexpr DWORD StartupTimeoutMs = 5000;
 constexpr UINT DismissAfterKey = WM_APP + 1;
 constexpr UINT ShowResumeHint = WM_APP + 5;
 constexpr ACCESS_MASK InputDesktopAccess = DESKTOP_READOBJECTS | DESKTOP_SWITCHDESKTOP;
+#ifdef SCREEN_OFF_DEVELOPMENT
+constexpr wchar_t SettingsKey[] = L"Software\\ScreenOff-Development";
+constexpr wchar_t AppName[] = L"ScreenOff Development";
+constexpr wchar_t RunValue[] = L"ScreenOff-Development";
+constexpr wchar_t TrayClass[] = L"ScreenOffDevelopmentShortcutListener";
+constexpr wchar_t ListenerMutex[] = L"Local\\ScreenOff-Development-ShortcutListener";
+#else
 constexpr wchar_t SettingsKey[] = L"Software\\ScreenOff";
+constexpr wchar_t AppName[] = L"ScreenOff";
+constexpr wchar_t RunValue[] = L"ScreenOff";
+constexpr wchar_t TrayClass[] = L"ScreenOffShortcutListener";
+constexpr wchar_t ListenerMutex[] = L"Local\\ScreenOff-ShortcutListener";
+#endif
 
 Settings LoadSettings() {
     Settings settings;
@@ -421,20 +434,21 @@ int RunWorker(HINSTANCE instance, HANDLE ready, HANDLE dismiss, HANDLE stop, HAN
     }
 
     int result = WorkerStartupFailed;
-    UINT_PTR reminderTimer = 0;
+    bool reminderActive = false;
     DWORD reminderStart = 0;
     if (SetEvent(ready)) {
         result = Success;
         const HANDLE exitEvents[]{stop, supervisor};
         for (;;) {
-            const DWORD wait = MsgWaitForMultipleObjectsEx(2, exitEvents, INFINITE, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
+            const DWORD wait = MsgWaitForMultipleObjectsEx(2, exitEvents, reminderActive ? 16 : INFINITE,
+                                                          QS_ALLINPUT, MWMO_INPUTAVAILABLE);
             if (wait == WAIT_OBJECT_0) break;
             if (wait == WAIT_OBJECT_0 + 1) {
                 RestoreDesktop(original.get(), blackout);
                 result = WorkerInterrupted;
                 break;
             }
-            if (wait != WAIT_OBJECT_0 + 2) {
+            if (wait != WAIT_OBJECT_0 + 2 && wait != WAIT_TIMEOUT) {
                 result = WorkerInterrupted;
                 break;
             }
@@ -449,22 +463,19 @@ int RunWorker(HINSTANCE instance, HANDLE ready, HANDLE dismiss, HANDLE stop, HAN
                 }
                 if (WaitForMultipleObjects(2, exitEvents, FALSE, 0) != WAIT_TIMEOUT) break;
             }
-            if (state.reminderRequested && !reminderTimer) {
+            if (state.reminderRequested && !reminderActive) {
                 reminderStart = GetTickCount();
-                reminderTimer = SetTimer(nullptr, 0, 16, nullptr);
+                reminderActive = true;
             }
             state.reminderRequested = false;
-            if (reminderTimer) {
+            if (reminderActive) {
                 const DWORD elapsed = GetTickCount() - reminderStart;
                 const int gray = ReminderGray(elapsed);
                 if (gray != state.reminderGray) {
                     state.reminderGray = gray;
-                    for (HWND window : windows) InvalidateRect(window, nullptr, FALSE);
+                    for (HWND window : windows) RedrawWindow(window, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW);
                 }
-                if (elapsed >= ReminderDuration) {
-                    KillTimer(nullptr, reminderTimer);
-                    reminderTimer = 0;
-                }
+                reminderActive = elapsed < ReminderDuration;
             }
             if (state.displayChanged) {
                 state.displayChanged = false;
@@ -476,7 +487,6 @@ int RunWorker(HINSTANCE instance, HANDLE ready, HANDLE dismiss, HANDLE stop, HAN
         }
     }
 
-    if (reminderTimer) KillTimer(nullptr, reminderTimer);
     SetThreadExecutionState(ES_CONTINUOUS);
     for (HWND window : windows) DestroyWindow(window);
     return result;
@@ -565,7 +575,6 @@ int Supervise() {
     return result;
 }
 
-constexpr wchar_t TrayClass[] = L"ScreenOffShortcutListener";
 constexpr wchar_t RunKey[] = L"Software\\Microsoft\\Windows\\CurrentVersion\\Run";
 constexpr UINT OpenSettings = WM_APP + 2;
 constexpr UINT TrayClick = WM_APP + 3;
@@ -602,18 +611,18 @@ void ShowShortcut(Listener& state) {
 
 bool SignInEnabled() {
     DWORD size = 0;
-    return RegGetValueW(HKEY_CURRENT_USER, RunKey, L"ScreenOff", RRF_RT_REG_SZ, nullptr, nullptr, &size) == ERROR_SUCCESS;
+    return RegGetValueW(HKEY_CURRENT_USER, RunKey, RunValue, RRF_RT_REG_SZ, nullptr, nullptr, &size) == ERROR_SUCCESS;
 }
 
 bool SetSignIn(bool enabled) {
     if (!enabled) {
-        const LSTATUS result = RegDeleteKeyValueW(HKEY_CURRENT_USER, RunKey, L"ScreenOff");
+        const LSTATUS result = RegDeleteKeyValueW(HKEY_CURRENT_USER, RunKey, RunValue);
         return result == ERROR_SUCCESS || result == ERROR_FILE_NOT_FOUND;
     }
     const auto path = ExecutablePath();
     const auto command = L"\"" + path + L"\" --tray";
     return !path.empty() && command.size() < 260 &&
-           RegSetKeyValueW(HKEY_CURRENT_USER, RunKey, L"ScreenOff", REG_SZ, command.c_str(),
+           RegSetKeyValueW(HKEY_CURRENT_USER, RunKey, RunValue, REG_SZ, command.c_str(),
                            static_cast<DWORD>((command.size() + 1) * sizeof(wchar_t))) == ERROR_SUCCESS;
 }
 
@@ -663,6 +672,9 @@ LRESULT CALLBACK CaptureShortcut(int code, WPARAM message, LPARAM data) {
 
 INT_PTR CALLBACK SettingsProc(HWND dialog, UINT message, WPARAM wparam, LPARAM lparam) {
     if (message == WM_INITDIALOG) {
+#ifdef SCREEN_OFF_DEVELOPMENT
+        SetWindowTextW(dialog, L"ScreenOff Development Settings");
+#endif
         auto& state = *reinterpret_cast<Listener*>(lparam);
         SetWindowLongPtrW(dialog, DWLP_USER, lparam);
         state.dialog = dialog;
@@ -750,7 +762,7 @@ void TrayIcon(const Listener& state, DWORD action) {
     icon.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
     icon.uCallbackMessage = TrayClick;
     icon.hIcon = LoadIconW(state.instance, MAKEINTRESOURCEW(101));
-    wcscpy_s(icon.szTip, L"ScreenOff");
+    wcscpy_s(icon.szTip, AppName);
     Shell_NotifyIconW(action, &icon);
 }
 
@@ -840,7 +852,7 @@ LRESULT CALLBACK TrayProc(HWND window, UINT message, WPARAM wparam, LPARAM lpara
 }
 
 int RunListener(HINSTANCE instance, bool configure) {
-    Handle lock(CreateMutexW(nullptr, FALSE, L"Local\\ScreenOff-ShortcutListener"), CloseHandle);
+    Handle lock(CreateMutexW(nullptr, FALSE, ListenerMutex), CloseHandle);
     const DWORD lockError = GetLastError();
     if (!lock) return EventCreationFailed;
     if (lockError == ERROR_ALREADY_EXISTS) {

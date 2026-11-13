@@ -21,15 +21,20 @@ set "stem=%TEMP%\ScreenOff-%RANDOM%-%RANDOM%"
 if /i "%~1"=="test" goto test
 
 set "executable=%~dp0ScreenOff.exe"
-if defined installerVersion set "executable=%stem%.exe"
+set "buildMode=/DSCREEN_OFF_DEVELOPMENT"
+if defined installerVersion (
+    set "executable=%stem%.exe"
+    set "buildMode="
+)
 rc /nologo /i "%~dp0." /fo "%stem%.res" "%~dp0ScreenOff.rc"
 if errorlevel 1 exit /b 1
-cl /nologo /std:c++17 /EHsc /W4 /WX /O2 /MT /Fo"%stem%.obj" /Fe"%executable%" "%~dp0ScreenOff.cpp" "%stem%.res" /link /SUBSYSTEM:WINDOWS user32.lib gdi32.lib imm32.lib
+cl /nologo /std:c++17 /EHsc /W4 /WX /O2 /MT %buildMode% /Fo"%stem%.obj" /Fe"%executable%" "%~dp0ScreenOff.cpp" "%stem%.res" /link /SUBSYSTEM:WINDOWS user32.lib gdi32.lib imm32.lib
 if errorlevel 1 exit /b 1
 dumpbin /headers "%executable%" | findstr /C:"machine (x64)" /C:"subsystem (Windows GUI)"
 if errorlevel 1 exit /b 1
 if defined installerVersion goto installer
-exit /b 0
+powershell.exe -NoProfile -Command "$ErrorActionPreference = 'Stop'; $folder = Split-Path -LiteralPath $env:executable; $shell = New-Object -ComObject WScript.Shell; $link = $shell.CreateShortcut((Join-Path $folder 'ScreenOff Settings.lnk')); $link.TargetPath = $env:executable; $link.Arguments = '--settings'; $link.WorkingDirectory = $folder; $link.Save()"
+exit /b %errorlevel%
 
 :installer
 set "iscc=%ProgramFiles(x86)%\Inno Setup 6\ISCC.exe"
