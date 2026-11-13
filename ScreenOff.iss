@@ -22,6 +22,7 @@ SetupAppRunningError=Setup has detected that %1 is currently running.%n%nIn the 
 [Files]
 Source: "{#AppExecutable}"; DestDir: "{app}"; DestName: "ScreenOff.exe"; Flags: ignoreversion
 Source: "LICENSE"; DestDir: "{app}"
+Source: "ScreenOff User Guide.txt"; DestDir: "{app}"
 
 [Icons]
 Name: "{autoprograms}\ScreenOff"; Filename: "{app}\ScreenOff.exe"; WorkingDir: "{app}"
