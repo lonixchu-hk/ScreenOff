@@ -2,7 +2,7 @@
 
 101 ICON "assets\\ScreenOff.ico"
 
-200 DIALOGEX 0, 0, 288, 154
+200 DIALOGEX 0, 0, 288, 166
 STYLE DS_SETFONT | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU
 CAPTION "Setting"
 FONT 9, "Segoe UI"
@@ -12,12 +12,13 @@ BEGIN
     COMBOBOX 201, 111, 18, 158, 75, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
     LTEXT "Keyboard double-tap", -1, 17, 40, 92, 10
     COMBOBOX 202, 111, 37, 158, 105, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
-    GROUPBOX "Start blackout shortcut", -1, 8, 65, 272, 62
+    GROUPBOX "Start blackout shortcut", -1, 8, 65, 272, 74
     EDITTEXT 203, 17, 78, 149, 14, ES_READONLY | ES_AUTOHSCROLL
     PUSHBUTTON "&Record", 204, 171, 78, 46, 14
     PUSHBUTTON "&Clear", 205, 222, 78, 47, 14
     LTEXT "Use Ctrl, Alt, or Shift with a letter, number, or F1-F11.", -1, 17, 95, 251, 10
-    AUTOCHECKBOX "Start shortcut listener at sign-in", 206, 17, 108, 252, 12, WS_TABSTOP
-    DEFPUSHBUTTON "&Save", IDOK, 175, 133, 50, 14
-    PUSHBUTTON "Cancel", IDCANCEL, 230, 133, 50, 14
+    LTEXT "", 207, 17, 108, 251, 10
+    AUTOCHECKBOX "Start shortcut listener at sign-in", 206, 17, 120, 252, 12, WS_TABSTOP
+    DEFPUSHBUTTON "&Save", IDOK, 175, 145, 50, 14
+    PUSHBUTTON "Cancel", IDCANCEL, 230, 145, 50, 14
 END
