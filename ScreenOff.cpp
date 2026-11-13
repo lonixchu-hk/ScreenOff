@@ -464,7 +464,8 @@ constexpr wchar_t RunKey[] = L"Software\\Microsoft\\Windows\\CurrentVersion\\Run
 constexpr UINT OpenSettings = WM_APP + 2;
 constexpr UINT TrayClick = WM_APP + 3;
 constexpr UINT ShortcutRecorded = WM_APP + 4;
-enum { SettingsDialog = 200, MouseChoice, KeyChoice, ShortcutText, RecordShortcut, ClearShortcut, StartAtSignIn };
+enum { SettingsDialog = 200, MouseChoice, KeyChoice, ShortcutText, RecordShortcut, ClearShortcut, StartAtSignIn,
+       ShortcutStatus };
 
 struct Listener {
     HINSTANCE instance;
@@ -504,6 +505,13 @@ void ShowShortcut(Listener& state) {
     if (mods & MOD_SHIFT) label += L"Shift + ";
     label += KeyName(LOWORD(state.draftShortcut));
     SetDlgItemTextW(state.dialog, ShortcutText, label.c_str());
+    const wchar_t* status = L"Off";
+    if (state.draftShortcut) {
+        if (state.draftShortcut == state.registered) status = L"Active after closing Settings";
+        else if (state.draftShortcut == state.settings.shortcut) status = L"Could not register this shortcut";
+        else status = L"Save to activate this shortcut";
+    }
+    SetDlgItemTextW(state.dialog, ShortcutStatus, status);
     EnableWindow(GetDlgItem(state.dialog, StartAtSignIn), state.draftShortcut != 0);
 }
 
@@ -614,6 +622,7 @@ INT_PTR CALLBACK SettingsProc(HWND dialog, UINT message, WPARAM wparam, LPARAM l
             return TRUE;
         }
         SetDlgItemTextW(dialog, ShortcutText, L"Press a shortcut, or Esc to cancel");
+        SetDlgItemTextW(dialog, ShortcutStatus, L"");
         SetFocus(GetDlgItem(dialog, ShortcutText));
         return TRUE;
     case ClearShortcut:

@@ -1,6 +1,5 @@
 [Setup]
 AppId=ScreenOff
-AppMutex=Local\ScreenOff-MVP,Local\ScreenOff-ShortcutListener
 AppName=ScreenOff
 AppVersion={#ReleaseVersion}
 VersionInfoVersion={#ReleaseVersion}
@@ -15,9 +14,6 @@ OutputBaseFilename=ScreenOff-Setup
 SetupIconFile=assets\ScreenOff.ico
 UninstallDisplayIcon={app}\ScreenOff.exe
 RestartApplications=no
-
-[Messages]
-SetupAppRunningError=Setup has detected that %1 is currently running.%n%nIn the notification area beside the Windows clock, right-click the ScreenOff icon and select Quit. If the icon is hidden, click the up arrow beside the clock first.%n%nIf you still cannot find the icon, close the ScreenOff Settings window and use Task Manager (Ctrl+Shift+Esc) to end ScreenOff.exe under Details.%n%nClick OK to continue, or Cancel to exit Setup.
 
 [Files]
 Source: "{#AppExecutable}"; DestDir: "{app}"; DestName: "ScreenOff.exe"; Flags: ignoreversion
@@ -37,6 +33,94 @@ const
   RunKey = 'Software\Microsoft\Windows\CurrentVersion\Run';
   RunValue = 'ScreenOff';
   SignInSuffix = '\ScreenOff.exe" --tray';
+  ProfileKey = 'Software\ScreenOff';
+  ListenerClass = 'ScreenOffShortcutListener';
+  ListenerMutex = 'Local\ScreenOff-ShortcutListener';
+  BlackoutMutex = 'Local\ScreenOff-MVP';
+  CloseMessage = $0010;
+
+var
+  PreviousListener: String;
+  Installed: Boolean;
+  Uninstalled: Boolean;
+
+function GetWindowThreadProcessId(Wnd: HWND; var ProcessId: Cardinal): Cardinal;
+  external 'GetWindowThreadProcessId@user32.dll stdcall';
+function FindWindowEx(Parent, After: HWND; ClassName, Caption: String): HWND;
+  external 'FindWindowExW@user32.dll stdcall';
+function OpenProcess(Access: Cardinal; Inherit: Boolean; ProcessId: Cardinal): THandle;
+  external 'OpenProcess@kernel32.dll stdcall';
+function QueryFullProcessImageName(Process: THandle; Flags: Cardinal; Path: String;
+                                   var Length: Cardinal): Boolean;
+  external 'QueryFullProcessImageNameW@kernel32.dll stdcall';
+function WaitForSingleObject(Process: THandle; Milliseconds: Cardinal): Cardinal;
+  external 'WaitForSingleObject@kernel32.dll stdcall';
+function CloseHandle(Handle: THandle): Boolean;
+  external 'CloseHandle@kernel32.dll stdcall';
+
+function StopListener(var Executable: String): Boolean;
+var
+  Listener, Dialog: HWND;
+  ProcessId, DialogProcessId, PathLength: Cardinal;
+  Process: THandle;
+  Path: String;
+begin
+  Result := False;
+  Listener := FindWindowByClassName(ListenerClass);
+  if Listener = 0 then
+  begin
+    Result := not CheckForMutexes(ListenerMutex);
+    Exit;
+  end;
+
+  GetWindowThreadProcessId(Listener, ProcessId);
+  Process := OpenProcess($101000, False, ProcessId); { Synchronize and query limited information. }
+  if Process = 0 then Exit;
+  try
+    PathLength := 32768;
+    SetLength(Path, PathLength);
+    if not QueryFullProcessImageName(Process, 0, Path, PathLength) then Exit;
+    SetLength(Path, PathLength);
+    if CompareText(ExtractFileName(Path), 'ScreenOff.exe') <> 0 then Exit;
+
+    { Older versions open an unowned Settings dialog. Close it before the listener. }
+    Dialog := FindWindowEx(0, 0, '#32770', 'Setting');
+    while Dialog <> 0 do
+    begin
+      GetWindowThreadProcessId(Dialog, DialogProcessId);
+      if DialogProcessId = ProcessId then
+      begin
+        PostMessage(Dialog, CloseMessage, 0, 0);
+        Break;
+      end;
+      Dialog := FindWindowEx(0, Dialog, '#32770', 'Setting');
+    end;
+    PostMessage(Listener, CloseMessage, 0, 0);
+    Executable := Path;
+    Result := WaitForSingleObject(Process, 5000) = 0;
+  finally
+    CloseHandle(Process);
+  end;
+end;
+
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+begin
+  Result := '';
+  if CheckForMutexes(BlackoutMutex) then
+    Result := 'Resume the desktop before installing ScreenOff.'
+  else if not StopListener(PreviousListener) then
+    Result := 'Setup could not close the ScreenOff shortcut listener. Try again.';
+end;
+
+procedure StartListener(Executable: String);
+var
+  ErrorCode: Integer;
+begin
+  if (Executable <> '') and not Exec(Executable, '--tray', ExtractFileDir(Executable),
+                                     SW_SHOWNORMAL, ewNoWait, ErrorCode) then
+    SuppressibleMsgBox('Could not start the ScreenOff shortcut listener.',
+                       mbError, MB_OK, IDOK);
+end;
 
 function InstalledSignInCommand: String;
 begin
@@ -47,7 +131,8 @@ procedure CurStepChanged(CurStep: TSetupStep);
 var
   Command: String;
 begin
-  if (CurStep = ssPostInstall) and
+  if CurStep <> ssPostInstall then Exit;
+  if
      RegQueryStringValue(HKCU, RunKey, RunValue, Command) and
      (Copy(Command, 1, 1) = '"') and
      (CompareText(Copy(Command, Length(Command) - Length(SignInSuffix) + 1,
@@ -59,17 +144,43 @@ begin
       SuppressibleMsgBox('Could not update Start shortcut listener at sign-in. Open ScreenOff Settings to update it.',
                          mbError, MB_OK, IDOK);
   end;
+  Installed := True;
+end;
+
+procedure DeinitializeSetup;
+begin
+  if Installed then
+  begin
+    if RegValueExists(HKCU, ProfileKey, 'Settings') then
+      StartListener(ExpandConstant('{app}\ScreenOff.exe'));
+  end
+  else
+    StartListener(PreviousListener);
+end;
+
+function InitializeUninstall: Boolean;
+begin
+  Result := not CheckForMutexes(BlackoutMutex);
+  if Result then
+    Result := StopListener(PreviousListener);
+  if not Result then
+    SuppressibleMsgBox('Resume the desktop or close ScreenOff before uninstalling.',
+                       mbError, MB_OK, IDOK);
 end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
-var
-  Command: String;
 begin
-  if (CurUninstallStep = usPostUninstall) and
-     RegQueryStringValue(HKCU, RunKey, RunValue, Command) and
-     (CompareText(Command, InstalledSignInCommand) = 0) then
-  begin
-    if not RegDeleteValue(HKCU, RunKey, RunValue) then
-      SuppressibleMsgBox('Could not remove the ScreenOff sign-in entry.', mbError, MB_OK, IDOK);
-  end;
+  if CurUninstallStep <> usPostUninstall then Exit;
+  if RegValueExists(HKCU, ProfileKey, 'Settings') and
+     not RegDeleteValue(HKCU, ProfileKey, 'Settings') then
+    SuppressibleMsgBox('Could not remove the ScreenOff profile.', mbError, MB_OK, IDOK);
+  RegDeleteKeyIfEmpty(HKCU, ProfileKey);
+  if RegValueExists(HKCU, RunKey, RunValue) and not RegDeleteValue(HKCU, RunKey, RunValue) then
+    SuppressibleMsgBox('Could not remove the ScreenOff sign-in entry.', mbError, MB_OK, IDOK);
+  Uninstalled := True;
+end;
+
+procedure DeinitializeUninstall;
+begin
+  if not Uninstalled then StartListener(PreviousListener);
 end;
