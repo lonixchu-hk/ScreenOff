@@ -1,0 +1,21 @@
+ScreenOff User Guide
+====================
+
+Resume your desktop
+-------------------
+By default, double-click the left mouse button or tap Space twice quickly.
+If you changed the resume gestures, use the ones selected in Settings.
+
+Start blackout
+--------------
+Open ScreenOff from the Start menu or run ScreenOff.exe in this folder.
+
+Configure ScreenOff
+-------------------
+Open the ScreenOff Settings shortcut in this folder or in the Start menu.
+Choose your resume gestures and select Save. Keep at least one enabled.
+
+To start blackout with a keyboard shortcut, select Record, press a
+combination such as Ctrl+Alt+B, and select Save. Close Settings before
+trying the shortcut. Enable Start shortcut listener at sign-in if you
+want the shortcut to work after signing in to Windows.
