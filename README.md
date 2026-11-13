@@ -14,22 +14,23 @@
 
 ## About ScreenOff
 
-ScreenOff is a small, portable Windows app for when you want a dark screen without interrupting work in the background. It fills every active display with pure black (`#000000`), hides the pointer, and asks Windows to keep the displays awake during the blackout.
+ScreenOff is a small Windows app for when you want a dark screen without interrupting work in the background. It fills every active display with pure black (`#000000`), hides the pointer, and asks Windows to keep the displays awake during the blackout.
 
 ## Download ScreenOff
 
-- [Portable ZIP for Windows 11 x64](https://github.com/lonixchu-hk/ScreenOff/releases/latest/download/ScreenOff-windows-x64.zip) includes `ScreenOff.exe`, `ScreenOff Settings.cmd`, and the MIT license.
-- [Complete ZIP for Windows 11 x64](https://github.com/lonixchu-hk/ScreenOff/releases/latest/download/ScreenOff-complete-windows-x64.zip) also includes the source code, build script, artwork, and this README.
+Download **ScreenOff-Setup.exe** for Windows 11 x64 from [GitHub Releases](https://github.com/lonixchu-hk/ScreenOff/releases) and run it. Setup installs both Start menu shortcuts for your Windows account and requires no administrator access. You can uninstall ScreenOff from **Settings → Apps → Installed apps**.
+
+If you used a portable ZIP, quit its tray listener before installing. Setup keeps your saved settings and moves an enabled sign-in shortcut to the installed copy.
 
 ## Use ScreenOff
 
-Extract the ZIP and open `ScreenOff.exe` to start blackout. To return to your desktop with the default settings, **double-click the left mouse button** or **tap Space twice quickly**.
+Open **ScreenOff** from the Start menu to start blackout. To return to your desktop with the default settings, **double-click the left mouse button** or **tap Space twice quickly**.
 
 Both default gestures use the Windows double-click timing. The desktop returns after the second release, and ScreenOff consumes the clicks or key presses so they stay out of the app underneath. With default settings, a single click, mouse movement, or holding Space keeps the blackout active.
 
 ## Configure ScreenOff
 
-Opening `ScreenOff.exe` starts blackout immediately. To configure ScreenOff, open `Setting.cmd` (named `ScreenOff Settings.cmd` in older releases) beside the executable. You can also run `ScreenOff.exe --settings` or choose **Setting** from the tray icon while the shortcut listener is running. Settings are saved for your Windows account.
+Open **ScreenOff Settings** from the Start menu or the installation folder. You can also choose **Setting** from the tray icon while the shortcut listener is running. If you build from source, use `Setting.cmd` or run `ScreenOff.exe --settings`. Settings are saved for your Windows account.
 
 - **Exit blackout** lets you choose a single or double click with the left or right mouse button and a key to tap twice. You can turn either method off and must keep at least one enabled.
 - **Start blackout shortcut** lets you select **Record**, press a shortcut such as `Ctrl+Alt+B`, and select **Save**. Press the shortcut from another app to start blackout. The notification area icon stays available between blackouts. Double-click the icon to reopen Settings or right-click to quit the listener.
@@ -54,6 +55,16 @@ The build produces `ScreenOff.exe` with the embedded Veil application icon. Run 
 ```powershell
 .\build.cmd test
 ```
+
+## Build the installer
+
+Install [Inno Setup 6.3 or later in the 6.x series](https://jrsoftware.org/isdl.php). If you installed it in a custom location, add its directory to `PATH`. Pass the release version without the leading `v` (for example, `1.2.0`).
+
+```powershell
+.\build.cmd installer 1.2.0
+```
+
+Upload `dist/ScreenOff-Setup.exe` as the release's only uploaded download.
 
 ## License
 
