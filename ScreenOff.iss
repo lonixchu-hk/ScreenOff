@@ -100,13 +100,21 @@ begin
   end;
 end;
 
+procedure StartListener(Executable: String); forward;
+
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 begin
   Result := '';
   if CheckForMutexes(BlackoutMutex) then
     Result := 'Resume the desktop before installing ScreenOff.'
   else if not StopListener(PreviousListener) then
-    Result := 'Setup could not close the ScreenOff shortcut listener. Try again.';
+    Result := 'Setup could not close ScreenOff. Try again.'
+  else if CheckForMutexes(BlackoutMutex) then
+  begin
+    StartListener(PreviousListener);
+    PreviousListener := '';
+    Result := 'Resume the desktop before installing ScreenOff.';
+  end;
 end;
 
 procedure StartListener(Executable: String);
@@ -115,7 +123,7 @@ var
 begin
   if (Executable <> '') and not Exec(Executable, '--tray', ExtractFileDir(Executable),
                                      SW_SHOWNORMAL, ewNoWait, ErrorCode) then
-    SuppressibleMsgBox('Could not start the ScreenOff shortcut listener.',
+    SuppressibleMsgBox('Could not start ScreenOff.',
                        mbError, MB_OK, IDOK);
 end;
 
@@ -138,7 +146,7 @@ begin
   begin
     if (Length(InstalledSignInCommand) >= 260) or
        not RegWriteStringValue(HKCU, RunKey, RunValue, InstalledSignInCommand) then
-      SuppressibleMsgBox('Could not update Start shortcut listener at sign-in. Open ScreenOff Settings to update it.',
+      SuppressibleMsgBox('Could not update Start ScreenOff at sign-in. Open ScreenOff Settings to update it.',
                          mbError, MB_OK, IDOK);
   end;
   Installed := True;
@@ -156,11 +164,22 @@ begin
 end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+var
+  ErrorCode: Integer;
 begin
   if CurUninstallStep = usAppMutexCheck then
   begin
     if CheckForMutexes(BlackoutMutex) or not StopListener(PreviousListener) then
       RaiseException('Resume the desktop or close ScreenOff before uninstalling.');
+  end;
+  if CurUninstallStep = usUninstall then
+  begin
+    if CheckForMutexes(BlackoutMutex) then
+      RaiseException('Resume the desktop before uninstalling ScreenOff.');
+    if RegValueExists(HKCU, ProfileKey, 'PreviousScreenSaver') and
+       (not Exec(ExpandConstant('{app}\ScreenOff.exe'), '--restore-screen-saver', ExpandConstant('{app}'),
+                 SW_HIDE, ewWaitUntilTerminated, ErrorCode) or (ErrorCode <> 0)) then
+      RaiseException('ScreenOff could not restore the Windows screen saver. Open ScreenOff Settings and try again.');
   end;
   if CurUninstallStep <> usPostUninstall then Exit;
   if RegValueExists(HKCU, ProfileKey, 'Settings') and

@@ -17,5 +17,18 @@ Choose your resume gestures and select Save. Keep at least one enabled.
 
 To start blackout with a keyboard shortcut, select Record, press a
 combination such as Ctrl+Alt+B, and select Save. Close Settings before
-trying the shortcut. Enable Start shortcut listener at sign-in if you
-want the shortcut to work after signing in to Windows.
+trying the shortcut.
+
+To start blackout automatically, select a delay under Start blackout
+after inactivity, then select Save. Confirm that ScreenOff can turn off
+the Windows screen saver for your account. Turn automatic blackout off
+to restore the previous screen saver setting, unless you changed that
+setting in Windows. Detected browser playback delays automatic blackout.
+Some muted videos may go undetected.
+
+Enable Start ScreenOff at sign-in to use your shortcut or automatic
+blackout after signing in to Windows.
+
+Exiting ScreenOff from the tray stops the timer for the current session.
+To restore the Windows screen saver, open Settings and set automatic
+blackout to Off.

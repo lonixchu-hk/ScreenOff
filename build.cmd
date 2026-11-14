@@ -28,7 +28,7 @@ if defined installerVersion (
 )
 rc /nologo /i "%~dp0." /fo "%stem%.res" "%~dp0ScreenOff.rc"
 if errorlevel 1 exit /b 1
-cl /nologo /std:c++17 /EHsc /W4 /WX /O2 /MT %buildMode% /Fo"%stem%.obj" /Fe"%executable%" "%~dp0ScreenOff.cpp" "%stem%.res" /link /SUBSYSTEM:WINDOWS user32.lib gdi32.lib imm32.lib
+cl /nologo /std:c++17 /EHsc /W4 /WX /O2 /MT /I"%WindowsSdkDir%Include\%WindowsSDKVersion%cppwinrt" %buildMode% /Fo"%stem%.obj" /Fe"%executable%" "%~dp0ScreenOff.cpp" "%stem%.res" /link /SUBSYSTEM:WINDOWS user32.lib gdi32.lib imm32.lib
 if errorlevel 1 exit /b 1
 dumpbin /headers "%executable%" | findstr /C:"machine (x64)" /C:"subsystem (Windows GUI)"
 if errorlevel 1 exit /b 1

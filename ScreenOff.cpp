@@ -5,6 +5,11 @@
 #include <string>
 
 constexpr UINT ShortcutModifiers = MOD_CONTROL | MOD_ALT | MOD_SHIFT;
+constexpr DWORD IdleTimeouts[]{0, 1, 5, 10, 15, 30, 60, 120};
+
+constexpr bool PlaybackCheckExpired(DWORD elapsed) {
+    return elapsed >= 5000;
+}
 
 bool ShortcutKey(UINT key) {
     return (key >= 'A' && key <= 'Z') || (key >= '0' && key <= '9') ||
@@ -19,12 +24,47 @@ struct Settings {
     DWORD mouse = 1; // Off, left double, right double, left single, right single.
     DWORD key = VK_SPACE;
     DWORD shortcut = 0;
+    DWORD idleMinutes = 0;
 
     bool Valid() const {
+        bool validTimeout = false;
+        for (const DWORD timeout : IdleTimeouts) validTimeout |= idleMinutes == timeout;
         const UINT modifiers = HIWORD(shortcut);
-        return mouse <= 4 && (!key || ExitKey(key)) && (mouse || key) &&
+        return validTimeout && mouse <= 4 && (!key || ExitKey(key)) && (mouse || key) &&
                (!shortcut || (modifiers && !(modifiers & ~ShortcutModifiers) && ShortcutKey(LOWORD(shortcut))));
     }
+};
+
+Settings DecodeSettings(Settings settings, DWORD size) {
+    if (size == 3 * sizeof(DWORD)) settings.idleMinutes = 0;
+    else if (size != sizeof(settings)) return {};
+    return settings.Valid() ? settings : Settings{};
+}
+
+class IdleCountdown {
+public:
+    void Reset(DWORD now) {
+        start_ = now;
+        attempted_ = false;
+    }
+
+    bool Ready(DWORD now, DWORD inputAge, DWORD minutes, bool deferred) {
+        const DWORD lastInput = now - inputAge;
+        if (lastInput != lastInput_) attempted_ = false;
+        lastInput_ = lastInput;
+        if (deferred || deferred_) Reset(now);
+        deferred_ = deferred;
+        const DWORD timeout = minutes * 60000;
+        if (!minutes || deferred || attempted_ || inputAge < timeout || now - start_ < timeout) return false;
+        attempted_ = true;
+        return true;
+    }
+
+private:
+    DWORD start_ = 0;
+    DWORD lastInput_ = 0;
+    bool attempted_ = false;
+    bool deferred_ = false;
 };
 
 std::wstring KeyName(UINT key) {
@@ -108,6 +148,52 @@ private:
 #include <cstdio>
 
 int main() {
+    if (PlaybackCheckExpired(4999) || !PlaybackCheckExpired(5000)) {
+        std::fputs("Save must allow a bounded wait for playback detection.\n", stderr);
+        return 1;
+    }
+    for (const DWORD minutes : {0UL, 1UL, 5UL, 10UL, 15UL, 30UL, 60UL, 120UL}) {
+        Settings settings;
+        settings.idleMinutes = minutes;
+        if (!settings.Valid() || DecodeSettings(settings, sizeof(settings)).idleMinutes != minutes) {
+            std::fputs("Settings must accept and preserve each supported idle timeout.\n", stderr);
+            return 1;
+        }
+    }
+    for (const DWORD minutes : {60UL, 120UL}) {
+        IdleCountdown countdown;
+        const DWORD timeout = minutes * 60000;
+        if (countdown.Ready(timeout - 1, timeout - 1, minutes, false) ||
+            !countdown.Ready(timeout, timeout, minutes, false)) {
+            std::fputs("Hour-long timeouts must activate at the selected boundary.\n", stderr);
+            return 1;
+        }
+    }
+    Settings invalidTimeout;
+    invalidTimeout.idleMinutes = 2;
+    const auto legacy = DecodeSettings(Settings{4, VK_RETURN, MAKELONG('B', MOD_ALT), 30}, 3 * sizeof(DWORD));
+    if (invalidTimeout.Valid() || legacy.mouse != 4 || legacy.key != VK_RETURN ||
+        legacy.shortcut != MAKELONG('B', MOD_ALT) || legacy.idleMinutes != 0 ||
+        DecodeSettings(Settings{4, 0, 0, 5}, 2 * sizeof(DWORD)).mouse != 1) {
+        std::fputs("Settings must support legacy profiles and validate idle timeout values.\n", stderr);
+        return 1;
+    }
+    IdleCountdown idle;
+    idle.Reset(100);
+    if (idle.Ready(60099, 59999, 1, false) || idle.Ready(60100, 59999, 1, false) ||
+        !idle.Ready(60100, 60000, 1, false) ||
+        idle.Ready(61000, 60900, 1, true) || idle.Ready(62000, 61900, 1, false) ||
+        idle.Ready(121999, 121899, 1, false) || !idle.Ready(122000, 121900, 1, false) ||
+        idle.Ready(200000, 199900, 1, false) || !idle.Ready(200000, 60000, 1, false) ||
+        idle.Ready(201000, 61000, 0, false)) {
+        std::fputs("Idle blackout must honor the timeout, input age, and playback deferral.\n", stderr);
+        return 1;
+    }
+    idle.Reset(222);
+    if (idle.Ready(60221, 70000, 1, false) || !idle.Ready(60222, 70000, 1, false)) {
+        std::fputs("Idle blackout must start a fresh countdown after rearming.\n", stderr);
+        return 1;
+    }
     if (ReminderGray(0) != 0 || ReminderGray(125) != 104 ||
         ReminderGray(250) != 208 || ReminderGray(3750) != 208 ||
         ReminderGray(3875) != 104 || ReminderGray(4000) != 0) {
@@ -176,18 +262,25 @@ int main() {
         std::fputs("An unmatched release or slow Space pair must not dismiss.\n", stderr);
         return 1;
     }
-    std::puts("Gesture tests passed.");
+    std::puts("Gesture and idle blackout tests passed.");
     return 0;
 }
 #else
 #include <cwchar>
 #include <memory>
+#include <optional>
+#include <roapi.h>
 #include <shellapi.h>
 #include <type_traits>
 #include <vector>
+#include <wtsapi32.h>
+#include <winrt/Windows.Foundation.Collections.h>
+#include <winrt/Windows.Media.Control.h>
 
 #pragma comment(lib, "advapi32.lib")
 #pragma comment(lib, "shell32.lib")
+#pragma comment(lib, "windowsapp.lib")
+#pragma comment(lib, "wtsapi32.lib")
 
 namespace {
 using Handle = std::unique_ptr<void, decltype(&CloseHandle)>;
@@ -203,12 +296,14 @@ constexpr UINT ShowResumeHint = WM_APP + 5;
 constexpr ACCESS_MASK InputDesktopAccess = DESKTOP_READOBJECTS | DESKTOP_SWITCHDESKTOP;
 #ifdef SCREEN_OFF_DEVELOPMENT
 constexpr wchar_t SettingsKey[] = L"Software\\ScreenOff-Development";
+constexpr wchar_t AlternateSettingsKey[] = L"Software\\ScreenOff";
 constexpr wchar_t AppName[] = L"ScreenOff Development";
 constexpr wchar_t RunValue[] = L"ScreenOff-Development";
 constexpr wchar_t TrayClass[] = L"ScreenOffDevelopmentShortcutListener";
 constexpr wchar_t ListenerMutex[] = L"Local\\ScreenOff-Development-ShortcutListener";
 #else
 constexpr wchar_t SettingsKey[] = L"Software\\ScreenOff";
+constexpr wchar_t AlternateSettingsKey[] = L"Software\\ScreenOff-Development";
 constexpr wchar_t AppName[] = L"ScreenOff";
 constexpr wchar_t RunValue[] = L"ScreenOff";
 constexpr wchar_t TrayClass[] = L"ScreenOffShortcutListener";
@@ -219,10 +314,8 @@ Settings LoadSettings() {
     Settings settings;
     DWORD size = sizeof(settings);
     if (RegGetValueW(HKEY_CURRENT_USER, SettingsKey, L"Settings", RRF_RT_REG_BINARY,
-                     nullptr, &settings, &size) != ERROR_SUCCESS || size != sizeof(settings) || !settings.Valid()) {
-        return {};
-    }
-    return settings;
+                     nullptr, &settings, &size) != ERROR_SUCCESS) return {};
+    return DecodeSettings(settings, size);
 }
 
 std::wstring ExecutablePath() {
@@ -243,6 +336,7 @@ enum ExitCode {
     SwitchFailed,
     WorkerInterrupted,
     InvalidWorkerArguments,
+    ScreenSaverRestoreFailed,
 };
 
 struct WorkerState {
@@ -579,8 +673,123 @@ constexpr wchar_t RunKey[] = L"Software\\Microsoft\\Windows\\CurrentVersion\\Run
 constexpr UINT OpenSettings = WM_APP + 2;
 constexpr UINT TrayClick = WM_APP + 3;
 constexpr UINT ShortcutRecorded = WM_APP + 4;
+constexpr UINT_PTR ShortcutTimer = 1;
+constexpr UINT_PTR IdleTimer = 2;
+constexpr UINT_PTR PlaybackCheckTimer = 3;
 enum { SettingsDialog = 200, MouseChoice, KeyChoice, ShortcutText, RecordShortcut, ClearShortcut, StartAtSignIn,
-       ShortcutStatus };
+       ShortcutStatus, IdleChoice };
+
+constexpr wchar_t SaverBackup[] = L"PreviousScreenSaver";
+constexpr wchar_t DesktopKey[] = L"Control Panel\\Desktop";
+constexpr wchar_t SaverMutex[] = L"Local\\ScreenOff-ScreenSaverSettings";
+
+Handle LockSaver() {
+    Handle lock(CreateMutexW(nullptr, FALSE, SaverMutex), CloseHandle);
+    if (GetLastError() == ERROR_ALREADY_EXISTS) lock.reset();
+    return lock;
+}
+
+LSTATUS ReadString(const wchar_t* key, const wchar_t* value, std::wstring& result) {
+    wchar_t buffer[32768];
+    DWORD size = sizeof(buffer);
+    const auto status = RegGetValueW(HKEY_CURRENT_USER, key, value, RRF_RT_REG_SZ | RRF_NOEXPAND,
+                                    nullptr, buffer, &size);
+    result = status == ERROR_SUCCESS ? buffer : L"";
+    return status;
+}
+
+bool SaverManaged() {
+    DWORD size = 0;
+    const auto status = RegGetValueW(HKEY_CURRENT_USER,
+        L"Software\\Policies\\Microsoft\\Windows\\Control Panel\\Desktop", L"ScreenSaveActive",
+        RRF_RT_ANY, nullptr, nullptr, &size);
+    return status != ERROR_FILE_NOT_FOUND && status != ERROR_PATH_NOT_FOUND;
+}
+
+bool SetSaver(bool enabled) {
+    BOOL active = FALSE;
+    return SystemParametersInfoW(SPI_SETSCREENSAVEACTIVE, enabled, nullptr, SPIF_UPDATEINIFILE | SPIF_SENDCHANGE) &&
+           SystemParametersInfoW(SPI_GETSCREENSAVEACTIVE, 0, &active, 0) && (active != FALSE) == enabled;
+}
+
+LSTATUS SaverBackupStatus(const wchar_t* key) {
+    DWORD size = 0;
+    return RegGetValueW(HKEY_CURRENT_USER, key, SaverBackup, RRF_RT_ANY, nullptr, nullptr, &size);
+}
+
+bool RestoreSaver() {
+    std::wstring previous;
+    const auto backup = ReadString(SettingsKey, SaverBackup, previous);
+    if (backup == ERROR_FILE_NOT_FOUND || backup == ERROR_PATH_NOT_FOUND) return true;
+    if (backup != ERROR_SUCCESS) return false;
+
+    std::wstring current;
+    const auto selected = ReadString(DesktopKey, L"SCRNSAVE.EXE", current);
+    BOOL active = FALSE;
+    if ((selected != ERROR_SUCCESS && selected != ERROR_FILE_NOT_FOUND) ||
+        !SystemParametersInfoW(SPI_GETSCREENSAVEACTIVE, 0, &active, 0)) return false;
+    if (!active && current == previous && (SaverManaged() || !SetSaver(true))) return false;
+    return RegDeleteKeyValueW(HKEY_CURRENT_USER, SettingsKey, SaverBackup) == ERROR_SUCCESS;
+}
+
+const wchar_t* DisableSaver() {
+    if (SaverBackupStatus(AlternateSettingsKey) == ERROR_SUCCESS)
+        return L"Turn off automatic blackout in the other ScreenOff installation first.";
+    if (SaverManaged()) return L"The Windows screen saver is managed by policy. Automatic blackout is still off.";
+    BOOL active = FALSE;
+    if (!SystemParametersInfoW(SPI_GETSCREENSAVEACTIVE, 0, &active, 0))
+        return L"Windows could not read the screen saver setting. Automatic blackout is still off.";
+    if (!active) return nullptr;
+
+    std::wstring selected;
+    const auto status = ReadString(DesktopKey, L"SCRNSAVE.EXE", selected);
+    if ((status != ERROR_SUCCESS && status != ERROR_FILE_NOT_FOUND) ||
+        RegSetKeyValueW(HKEY_CURRENT_USER, SettingsKey, SaverBackup, REG_SZ, selected.c_str(),
+                        static_cast<DWORD>((selected.size() + 1) * sizeof(wchar_t))) != ERROR_SUCCESS)
+        return L"ScreenOff could not save the current screen saver setting. Automatic blackout is still off.";
+    if (SetSaver(false)) return nullptr;
+    if (!RestoreSaver()) return L"Automatic blackout is off. Check the Windows screen saver setting.";
+    return L"Windows could not turn off the screen saver. Automatic blackout is still off.";
+}
+
+namespace media = winrt::Windows::Media::Control;
+
+class Playback {
+public:
+    Playback() : initialized_(SUCCEEDED(RoInitialize(RO_INIT_MULTITHREADED))) {}
+    ~Playback() {
+        request_ = nullptr;
+        manager_ = nullptr;
+        if (initialized_) RoUninitialize();
+    }
+
+    std::optional<bool> Playing() {
+        if (!initialized_) return std::nullopt;
+        try {
+            if (!manager_) {
+                if (!request_) request_ = Manager::RequestAsync();
+                if (request_.Status() == winrt::Windows::Foundation::AsyncStatus::Started) return std::nullopt;
+                manager_ = request_.GetResults();
+                request_ = nullptr;
+            }
+            for (const auto& session : manager_.GetSessions()) {
+                if (session.GetPlaybackInfo().PlaybackStatus() == media::GlobalSystemMediaTransportControlsSessionPlaybackStatus::Playing)
+                    return true;
+            }
+            return false;
+        } catch (const winrt::hresult_error&) {
+            request_ = nullptr;
+            manager_ = nullptr;
+            return std::nullopt;
+        }
+    }
+
+private:
+    using Manager = media::GlobalSystemMediaTransportControlsSessionManager;
+    const bool initialized_;
+    Manager manager_{nullptr};
+    winrt::Windows::Foundation::IAsyncOperation<Manager> request_{nullptr};
+};
 
 struct Listener {
     HINSTANCE instance;
@@ -595,9 +804,23 @@ struct Listener {
     bool pending = false;
     UINT taskbarCreated = RegisterWindowMessageW(L"TaskbarCreated");
     Handle blackout{nullptr, CloseHandle};
+    IdleCountdown idle;
+    Playback playback;
+    std::optional<DWORD> playbackCheckStarted;
+    bool sessionUnavailable = false;
+    bool playbackUnavailable = false;
 };
 
 thread_local Listener* captureState = nullptr;
+
+DWORD SelectedTimeout(HWND dialog) {
+    const auto index = SendDlgItemMessageW(dialog, IdleChoice, CB_GETCURSEL, 0, 0);
+    return index >= 0 && index < static_cast<LRESULT>(std::size(IdleTimeouts)) ? IdleTimeouts[index] : 0;
+}
+
+void ShowSignIn(Listener& state) {
+    EnableWindow(GetDlgItem(state.dialog, StartAtSignIn), state.draftShortcut || SelectedTimeout(state.dialog));
+}
 
 void ShowShortcut(Listener& state) {
     std::wstring label;
@@ -614,7 +837,7 @@ void ShowShortcut(Listener& state) {
         else status = L"Save to activate this shortcut";
     }
     SetDlgItemTextW(state.dialog, ShortcutStatus, status);
-    EnableWindow(GetDlgItem(state.dialog, StartAtSignIn), state.draftShortcut != 0);
+    ShowSignIn(state);
 }
 
 bool SignInEnabled() {
@@ -640,14 +863,30 @@ bool RegisterShortcut(HWND window, int id, DWORD shortcut) {
 
 const wchar_t* SaveSettings(Listener& state, const Settings& next) {
     if (!next.Valid()) return L"Enable at least one exit method.";
+    const bool enablingIdle = next.idleMinutes && !state.settings.idleMinutes;
+    const bool restore = !next.idleMinutes &&
+                         (state.settings.idleMinutes || SaverBackupStatus(SettingsKey) == ERROR_SUCCESS);
+    auto saverLock = enablingIdle || restore ? LockSaver() : Handle{nullptr, CloseHandle};
+    if ((enablingIdle || restore) && !saverLock)
+        return L"Another ScreenOff process is updating the screen saver. Try again.";
     const bool changed = next.shortcut != state.registered;
     const int candidate = 3 - state.hotkeyId;
     if (changed && next.shortcut && !RegisterShortcut(state.window, candidate, next.shortcut)) {
         return L"Windows could not register this shortcut. Choose another combination.";
     }
-    if (RegSetKeyValueW(HKEY_CURRENT_USER, SettingsKey, L"Settings", REG_BINARY, &next, sizeof(next)) != ERROR_SUCCESS) {
+    const wchar_t* error = nullptr;
+    if (enablingIdle) {
+        if (!RestoreSaver()) error = L"ScreenOff could not recover the previous screen saver setting.";
+        else error = DisableSaver();
+    }
+    if (!error && RegSetKeyValueW(HKEY_CURRENT_USER, SettingsKey, L"Settings", REG_BINARY, &next, sizeof(next)) != ERROR_SUCCESS) {
+        error = enablingIdle && !RestoreSaver()
+            ? L"Settings were not saved. Check the Windows screen saver setting."
+            : L"ScreenOff could not save the settings.";
+    }
+    if (error) {
         if (changed && next.shortcut) UnregisterHotKey(state.window, candidate);
-        return L"ScreenOff could not save the settings.";
+        return error;
     }
     if (changed) {
         if (state.registered) UnregisterHotKey(state.window, state.hotkeyId);
@@ -655,7 +894,24 @@ const wchar_t* SaveSettings(Listener& state, const Settings& next) {
         state.registered = next.shortcut;
     }
     state.settings = next;
-    return nullptr;
+    return restore && !RestoreSaver()
+        ? L"Automatic blackout is off, but ScreenOff could not restore the Windows screen saver. Save again to retry."
+        : nullptr;
+}
+
+bool ConfirmIdle(HWND dialog) {
+    std::wstring message =
+        L"ScreenOff will turn off the Windows screen saver for your account. "
+        L"When you turn off automatic blackout or uninstall ScreenOff, it will restore "
+        L"the previous setting unless you change it in Windows.";
+    BOOL active = FALSE;
+    BOOL secure = FALSE;
+    if (SystemParametersInfoW(SPI_GETSCREENSAVEACTIVE, 0, &active, 0) && active &&
+        SystemParametersInfoW(SPI_GETSCREENSAVESECURE, 0, &secure, 0) && secure) {
+        message += L"\n\nYour current screen saver requires sign-in on resume. "
+                   L"Turning it off removes that sign-in trigger.";
+    }
+    return MessageBoxW(dialog, message.c_str(), L"Enable automatic blackout", MB_OKCANCEL | MB_ICONWARNING | MB_DEFBUTTON2) == IDOK;
 }
 
 LRESULT CALLBACK CaptureShortcut(int code, WPARAM message, LPARAM data) {
@@ -699,19 +955,38 @@ INT_PTR CALLBACK SettingsProc(HWND dialog, UINT message, WPARAM wparam, LPARAM l
             SendDlgItemMessageW(dialog, KeyChoice, CB_SETITEMDATA, index, key);
             if (key == state.settings.key) SendDlgItemMessageW(dialog, KeyChoice, CB_SETCURSEL, index, 0);
         }
+        for (const DWORD minutes : IdleTimeouts) {
+            std::wstring label;
+            if (!minutes) label = L"Off";
+            else if (minutes >= 60) label = minutes == 60 ? L"1 hour" : L"2 hours";
+            else label = std::to_wstring(minutes) + (minutes == 1 ? L" minute" : L" minutes");
+            const auto index = SendDlgItemMessageW(dialog, IdleChoice, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(label.c_str()));
+            if (minutes == state.settings.idleMinutes) SendDlgItemMessageW(dialog, IdleChoice, CB_SETCURSEL, index, 0);
+        }
         CheckDlgButton(dialog, StartAtSignIn, SignInEnabled() ? BST_CHECKED : BST_UNCHECKED);
         ShowShortcut(state);
         return TRUE;
     }
-    if (message != WM_COMMAND && message != ShortcutRecorded) return FALSE;
+    const bool checkingPlayback = message == WM_TIMER && wparam == PlaybackCheckTimer;
+    if (message != WM_COMMAND && message != ShortcutRecorded && !checkingPlayback) return FALSE;
     auto& state = *reinterpret_cast<Listener*>(GetWindowLongPtrW(dialog, DWLP_USER));
+    if (checkingPlayback && !state.playbackCheckStarted) return TRUE;
     if (message == ShortcutRecorded) {
         if (state.recorder && HIWORD(wparam)) state.draftShortcut = static_cast<DWORD>(wparam);
         state.recorder.reset();
         ShowShortcut(state);
         return TRUE;
     }
-    switch (LOWORD(wparam)) {
+    switch (checkingPlayback ? IDOK : LOWORD(wparam)) {
+    case IdleChoice:
+        if (HIWORD(wparam) == CBN_SELCHANGE) {
+            KillTimer(dialog, PlaybackCheckTimer);
+            state.playbackCheckStarted.reset();
+            EnableWindow(GetDlgItem(dialog, IDOK), TRUE);
+            ShowSignIn(state);
+            if (SelectedTimeout(dialog)) state.playback.Playing();
+        }
+        return TRUE;
     case ShortcutText:
         if (HIWORD(wparam) == EN_KILLFOCUS && state.recorder) {
             state.recorder.reset();
@@ -732,20 +1007,52 @@ INT_PTR CALLBACK SettingsProc(HWND dialog, UINT message, WPARAM wparam, LPARAM l
         return TRUE;
     case ClearShortcut:
         state.draftShortcut = 0;
-        CheckDlgButton(dialog, StartAtSignIn, BST_UNCHECKED);
+        if (!SelectedTimeout(dialog)) CheckDlgButton(dialog, StartAtSignIn, BST_UNCHECKED);
         ShowShortcut(state);
         return TRUE;
     case IDOK: {
-        if (state.recorder) return TRUE;
+        if (state.recorder || (!checkingPlayback && state.playbackCheckStarted)) return TRUE;
         const auto mouse = SendDlgItemMessageW(dialog, MouseChoice, CB_GETCURSEL, 0, 0);
         const auto index = SendDlgItemMessageW(dialog, KeyChoice, CB_GETCURSEL, 0, 0);
         const auto key = SendDlgItemMessageW(dialog, KeyChoice, CB_GETITEMDATA, index, 0);
-        const Settings next{static_cast<DWORD>(mouse), static_cast<DWORD>(key), state.draftShortcut};
+        const Settings next{static_cast<DWORD>(mouse), static_cast<DWORD>(key), state.draftShortcut, SelectedTimeout(dialog)};
+        if (next.idleMinutes && !state.settings.idleMinutes) {
+            if (!next.Valid()) {
+                KillTimer(dialog, PlaybackCheckTimer);
+                state.playbackCheckStarted.reset();
+                EnableWindow(GetDlgItem(dialog, IDOK), TRUE);
+                MessageBoxW(dialog, L"Enable at least one exit method.", L"Setting", MB_OK | MB_ICONWARNING);
+                return TRUE;
+            }
+            const bool playbackReady = state.playback.Playing().has_value();
+            if (!playbackReady && !state.playbackCheckStarted &&
+                SetTimer(dialog, PlaybackCheckTimer, 100, nullptr)) {
+                state.playbackCheckStarted = GetTickCount();
+                EnableWindow(GetDlgItem(dialog, IDOK), FALSE);
+                return TRUE;
+            }
+            if (!playbackReady && state.playbackCheckStarted &&
+                !PlaybackCheckExpired(GetTickCount() - *state.playbackCheckStarted)) return TRUE;
+            KillTimer(dialog, PlaybackCheckTimer);
+            state.playbackCheckStarted.reset();
+            EnableWindow(GetDlgItem(dialog, IDOK), TRUE);
+            if (!playbackReady) {
+                MessageBoxW(dialog, L"ScreenOff could not check Windows playback. Automatic blackout is still off.",
+                            L"Setting", MB_OK | MB_ICONWARNING);
+                return TRUE;
+            }
+            if (!ConfirmIdle(dialog)) return TRUE;
+        }
+        if (next.idleMinutes && !SetTimer(state.window, IdleTimer, 1000, nullptr)) {
+            MessageBoxW(dialog, L"Windows could not start the automatic blackout timer.",
+                        L"Setting", MB_OK | MB_ICONWARNING);
+            return TRUE;
+        }
         if (const auto* error = SaveSettings(state, next)) {
             MessageBoxW(dialog, error, L"Setting", MB_OK | MB_ICONWARNING);
             return TRUE;
         }
-        const bool signIn = next.shortcut && IsDlgButtonChecked(dialog, StartAtSignIn) == BST_CHECKED;
+        const bool signIn = (next.shortcut || next.idleMinutes) && IsDlgButtonChecked(dialog, StartAtSignIn) == BST_CHECKED;
         if (signIn != SignInEnabled() && !SetSignIn(signIn)) {
             MessageBoxW(dialog, L"Settings were saved, but Windows could not update Start at sign-in.",
                         L"Setting", MB_OK | MB_ICONWARNING);
@@ -771,7 +1078,9 @@ void TrayIcon(const Listener& state, DWORD action) {
     icon.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
     icon.uCallbackMessage = TrayClick;
     icon.hIcon = LoadIconW(state.instance, MAKEINTRESOURCEW(101));
-    wcscpy_s(icon.szTip, AppName);
+    if (state.playbackUnavailable)
+        swprintf_s(icon.szTip, L"%ls: Automatic blackout paused. Playback detection is unavailable.", AppName);
+    else wcscpy_s(icon.szTip, AppName);
     Shell_NotifyIconW(action, &icon);
 }
 
@@ -780,13 +1089,22 @@ void ShowSettings(Listener& state) {
         SetForegroundWindow(state.dialog);
         return;
     }
-    KillTimer(state.window, 1);
+    KillTimer(state.window, ShortcutTimer);
     state.pending = false;
     DialogBoxParamW(state.instance, MAKEINTRESOURCEW(SettingsDialog), nullptr, SettingsProc,
                     reinterpret_cast<LPARAM>(&state));
     state.dialog = nullptr;
+    state.playbackCheckStarted.reset();
     state.recorder.reset();
-    if (!state.registered) DestroyWindow(state.window);
+    state.idle.Reset(GetTickCount());
+    if (!state.settings.idleMinutes) {
+        KillTimer(state.window, IdleTimer);
+        if (state.playbackUnavailable) {
+            state.playbackUnavailable = false;
+            TrayIcon(state, NIM_MODIFY);
+        }
+    }
+    if (!state.registered && !state.settings.idleMinutes) DestroyWindow(state.window);
     else TrayIcon(state, NIM_ADD);
 }
 
@@ -796,6 +1114,45 @@ bool ShortcutHeld(DWORD shortcut) {
            ((mods & MOD_CONTROL) && GetAsyncKeyState(VK_CONTROL) < 0) ||
            ((mods & MOD_ALT) && GetAsyncKeyState(VK_MENU) < 0) ||
            ((mods & MOD_SHIFT) && GetAsyncKeyState(VK_SHIFT) < 0);
+}
+
+bool BlackoutRunning(const Listener& state) {
+    return state.blackout && WaitForSingleObject(state.blackout.get(), 0) == WAIT_TIMEOUT;
+}
+
+void LaunchBlackout(Listener& state) {
+    if (state.dialog || state.sessionUnavailable || BlackoutRunning(state) ||
+        !HasInput(GetThreadDesktop(GetCurrentThreadId()))) return;
+    const auto executable = ExecutablePath();
+    STARTUPINFOW startup{sizeof(startup)};
+    PROCESS_INFORMATION child{};
+    if (!executable.empty() && CreateProcessW(executable.c_str(), nullptr, nullptr, nullptr, FALSE, 0,
+                                               nullptr, nullptr, &startup, &child)) {
+        state.blackout.reset(child.hProcess);
+        CloseHandle(child.hThread);
+    }
+}
+
+void CheckIdle(Listener& state) {
+    if (!state.settings.idleMinutes) return;
+    const bool childActive = BlackoutRunning(state);
+    if (state.blackout && !childActive) {
+        state.blackout.reset();
+        state.idle.Reset(GetTickCount());
+    }
+    const bool unavailable = state.dialog || state.sessionUnavailable || childActive ||
+                             !HasInput(GetThreadDesktop(GetCurrentThreadId()));
+    const auto playing = unavailable ? std::optional<bool>{false} : state.playback.Playing();
+    if (!unavailable && state.playbackUnavailable == playing.has_value()) {
+        state.playbackUnavailable = !playing.has_value();
+        TrayIcon(state, NIM_MODIFY);
+    }
+    LASTINPUTINFO input{sizeof(input), 0};
+    const bool haveInput = GetLastInputInfo(&input) != FALSE;
+    const DWORD now = GetTickCount();
+    if (state.idle.Ready(now, now - input.dwTime, state.settings.idleMinutes,
+                         unavailable || playing.value_or(true) || !haveInput))
+        LaunchBlackout(state);
 }
 
 LRESULT CALLBACK TrayProc(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
@@ -811,24 +1168,37 @@ LRESULT CALLBACK TrayProc(HWND window, UINT message, WPARAM wparam, LPARAM lpara
     case WM_HOTKEY:
         if (!state->dialog && wparam == static_cast<WPARAM>(state->hotkeyId) &&
             state->registered == static_cast<DWORD>(MAKELONG(HIWORD(lparam), LOWORD(lparam)))) {
-            state->pending = SetTimer(window, 1, 20, nullptr) != 0;
+            state->pending = SetTimer(window, ShortcutTimer, 20, nullptr) != 0;
         }
         return 0;
+    case WM_WTSSESSION_CHANGE:
+        switch (wparam) {
+        case WTS_CONSOLE_DISCONNECT:
+        case WTS_REMOTE_DISCONNECT:
+        case WTS_SESSION_LOCK:
+            state->sessionUnavailable = true;
+            break;
+        case WTS_CONSOLE_CONNECT:
+        case WTS_REMOTE_CONNECT:
+        case WTS_SESSION_UNLOCK:
+            state->sessionUnavailable = false;
+            break;
+        }
+        state->idle.Reset(GetTickCount());
+        return 0;
+    case WM_POWERBROADCAST:
+        if (wparam == PBT_APMRESUMEAUTOMATIC || wparam == PBT_APMRESUMESUSPEND) state->idle.Reset(GetTickCount());
+        return TRUE;
     case WM_TIMER: {
-        if (wparam != 1 || !state->pending) return 0;
+        if (wparam == IdleTimer) {
+            CheckIdle(*state);
+            return 0;
+        }
+        if (wparam != ShortcutTimer || !state->pending) return 0;
         if (!HasInput(GetThreadDesktop(GetCurrentThreadId())) || !ShortcutHeld(state->registered)) {
-            KillTimer(window, 1);
+            KillTimer(window, ShortcutTimer);
             state->pending = false;
-            if (state->dialog || !HasInput(GetThreadDesktop(GetCurrentThreadId())) ||
-                (state->blackout && WaitForSingleObject(state->blackout.get(), 0) == WAIT_TIMEOUT)) return 0;
-            const auto executable = ExecutablePath();
-            STARTUPINFOW startup{sizeof(startup)};
-            PROCESS_INFORMATION child{};
-            if (!executable.empty() && CreateProcessW(executable.c_str(), nullptr, nullptr, nullptr, FALSE, 0,
-                                                       nullptr, nullptr, &startup, &child)) {
-                state->blackout.reset(child.hProcess);
-                CloseHandle(child.hThread);
-            }
+            LaunchBlackout(*state);
         }
         return 0;
     }
@@ -838,7 +1208,7 @@ LRESULT CALLBACK TrayProc(HWND window, UINT message, WPARAM wparam, LPARAM lpara
             const HMENU menu = CreatePopupMenu();
             if (!menu) return 0;
             AppendMenuW(menu, MF_STRING, 1, L"Setting");
-            AppendMenuW(menu, MF_STRING, 2, L"Exit shortcut listener");
+            AppendMenuW(menu, MF_STRING, 2, L"Exit ScreenOff");
             POINT cursor{};
             GetCursorPos(&cursor);
             SetForegroundWindow(window);
@@ -850,12 +1220,14 @@ LRESULT CALLBACK TrayProc(HWND window, UINT message, WPARAM wparam, LPARAM lpara
         }
         return 0;
     case WM_DESTROY:
+        WTSUnRegisterSessionNotification(window);
         if (state->registered) UnregisterHotKey(window, state->hotkeyId);
         TrayIcon(*state, NIM_DELETE);
         PostQuitMessage(0);
         return 0;
     default:
-        if (state && state->registered && message == state->taskbarCreated) TrayIcon(*state, NIM_ADD);
+        if (state && (state->registered || state->settings.idleMinutes) && message == state->taskbarCreated)
+            TrayIcon(*state, NIM_ADD);
         return DefWindowProcW(window, message, wparam, lparam);
     }
 }
@@ -878,7 +1250,14 @@ int RunListener(HINSTANCE instance, bool configure) {
         return Success;
     }
     Listener state{instance};
-    if (!configure && !state.settings.shortcut) return Success;
+    if (!state.settings.idleMinutes && SaverBackupStatus(SettingsKey) == ERROR_SUCCESS) {
+        const auto saverLock = LockSaver();
+        if (saverLock && !RestoreSaver()) {
+            MessageBoxW(nullptr, L"ScreenOff could not restore the Windows screen saver. Open Settings to retry.",
+                        AppName, MB_OK | MB_ICONWARNING);
+        }
+    }
+    if (!configure && !state.settings.shortcut && !state.settings.idleMinutes) return Success;
     WNDCLASSW type{};
     type.lpfnWndProc = TrayProc;
     type.hInstance = instance;
@@ -887,16 +1266,23 @@ int RunListener(HINSTANCE instance, bool configure) {
     state.window = CreateWindowExW(WS_EX_TOOLWINDOW, TrayClass, L"ScreenOff Shortcut", WS_POPUP,
                                   0, 0, 0, 0, nullptr, nullptr, instance, &state);
     if (!state.window) return WorkerStartupFailed;
+    WTSRegisterSessionNotification(state.window, NOTIFY_FOR_THIS_SESSION);
+    state.idle.Reset(GetTickCount());
+    if (state.settings.idleMinutes && !SetTimer(state.window, IdleTimer, 1000, nullptr))
+        MessageBoxW(state.window, L"Automatic blackout could not start. Turn it off in Settings to restore the Windows screen saver.",
+                    AppName, MB_OK | MB_ICONWARNING);
     if (state.settings.shortcut && RegisterShortcut(state.window, state.hotkeyId, state.settings.shortcut)) {
         state.registered = state.settings.shortcut;
-        TrayIcon(state, NIM_ADD);
-    } else if (!configure) {
+    } else if (!configure && state.settings.shortcut) {
         MessageBoxW(nullptr, L"Windows could not register the saved shortcut. Open Setting to change it.",
                     L"ScreenOff", MB_OK | MB_ICONWARNING);
-        DestroyWindow(state.window);
-        return Success;
+        if (!state.settings.idleMinutes) {
+            DestroyWindow(state.window);
+            return Success;
+        }
     }
     if (configure) ShowSettings(state);
+    else TrayIcon(state, NIM_ADD);
     MSG message{};
     while (GetMessageW(&message, nullptr, 0, 0) > 0) DispatchMessageW(&message);
     return Success;
@@ -907,6 +1293,10 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR arguments, int) {
     if (!*arguments) return Supervise();
     if (std::wcscmp(arguments, L"--settings") == 0) return RunListener(instance, true);
     if (std::wcscmp(arguments, L"--tray") == 0) return RunListener(instance, false);
+    if (std::wcscmp(arguments, L"--restore-screen-saver") == 0) {
+        const auto saverLock = LockSaver();
+        return saverLock && RestoreSaver() ? Success : ScreenSaverRestoreFailed;
+    }
 
     wchar_t expectedDesktop[64]{};
     HANDLE ready = nullptr, dismiss = nullptr, stop = nullptr, supervisor = nullptr;
