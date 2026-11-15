@@ -7,18 +7,25 @@
 <p align="center">Black out every monitor while your apps keep running.</p>
 
 <p align="center">
-  <a href="#use-screenoff"><img src="https://img.shields.io/badge/Windows-11%20x64-0078D4" alt="Windows 11 x64"></a>
-  <a href="#build-from-source"><img src="https://img.shields.io/badge/Win32-C%2B%2B17-5B21B6" alt="Win32 and C++17"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-15803D" alt="MIT license"></a>
+  <strong><a href="https://github.com/lonixchu-hk/ScreenOff/releases/latest/download/ScreenOff-Setup.exe">Download for Windows 11 x64</a></strong>
+  · <a href="https://github.com/lonixchu-hk/ScreenOff/releases/latest">Release notes</a>
 </p>
+
+<p align="center">Unsigned installer · No administrator access required</p>
+
+<p align="center">
+  <img src="assets/screenoff-demo.gif" width="920" alt="Illustrated demo: start ScreenOff with a configured shortcut to black out two monitors, then double-click to return and see the download has progressed.">
+</p>
+
+<p align="center">If ScreenOff is useful to you, give it a star on <a href="https://github.com/lonixchu-hk/ScreenOff">GitHub</a>.</p>
 
 ## About ScreenOff
 
-ScreenOff is a small Windows app for when you want a dark screen without interrupting work in the background. It fills every active display with pure black (`#000000`), hides the pointer, and asks Windows to keep the displays awake during the blackout.
+Use ScreenOff when you want a dark screen while a download, render, or other task keeps running. It fills every active display with pure black (`#000000`), hides the pointer, and asks Windows to keep the displays awake during the blackout.
 
 ## Download ScreenOff
 
-Download **ScreenOff-Setup.exe** for Windows 11 x64 from [GitHub Releases](https://github.com/lonixchu-hk/ScreenOff/releases) and run it. Setup installs both Start menu shortcuts for your Windows account and requires no administrator access. You can uninstall ScreenOff from **Settings → Apps → Installed apps**.
+Run **ScreenOff-Setup.exe** to install the **ScreenOff** and **ScreenOff Settings** shortcuts for your Windows account. To uninstall, open **Settings → Apps → Installed apps**.
 
 If you used a portable ZIP, quit its tray listener before installing. Setup keeps your saved settings and moves an enabled sign-in shortcut to the installed copy.
 
@@ -34,7 +41,8 @@ Open **ScreenOff Settings** from the Start menu or the installation folder. You 
 
 - **Exit blackout** lets you choose a single or double click with the left or right mouse button and a key to tap twice. You can turn either method off and must keep at least one enabled.
 - **Start blackout shortcut** lets you select **Record**, press a shortcut such as `Ctrl+Alt+B`, and select **Save**. Press the shortcut from another app to start blackout. The notification area icon stays available between blackouts. Double-click the icon to reopen Settings or right-click to quit the listener.
-- **Start shortcut listener at sign-in** is optional. If you move the executable, reopen Settings and re-enable this option from its new location. Select **Clear** and **Save** to disable the shortcut.
+- **Start blackout after inactivity** is off by default. Select a delay and confirm that ScreenOff can turn off the Windows screen saver for your account. Detected audio or video playback delays automatic blackout. Some muted or silent videos may go undetected.
+- **Start ScreenOff at sign-in** starts the listener for either your shortcut or automatic blackout. If you move the executable, reopen Settings from its new location and re-enable this option.
 
 ## How it works
 
